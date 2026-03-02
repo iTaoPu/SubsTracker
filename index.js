@@ -272,9 +272,8 @@ const lunarCalendar = {
 
     const baseDate = Date.UTC(1900, 0, 31);
     const objDate = Date.UTC(year, month - 1, day);
-    //let offset = Math.floor((objDate - baseDate) / 86400000);
-    let offset = Math.round((objDate - baseDate) / 86400000);
-
+    // 修复：改为 Math.floor 避免跨日误差
+    let offset = Math.floor((objDate - baseDate) / 86400000);
 
     let temp = 0;
     let lunarYear = 1900;
@@ -1447,9 +1446,8 @@ const adminPage = `
 
         const baseDate = Date.UTC(1900, 0, 31);
         const objDate = Date.UTC(year, month - 1, day);
-        //let offset = Math.floor((objDate - baseDate) / 86400000);
-        let offset = Math.round((objDate - baseDate) / 86400000);
-
+        // 修复：改为 Math.floor
+        let offset = Math.floor((objDate - baseDate) / 86400000);
 
         let temp = 0;
         let lunarYear = 1900;
@@ -1959,9 +1957,10 @@ const lunarBiz = {
       filtered.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
 
       const currentTime = new Date();
-      // 将 Intl 对象实例化移出循环，避免重复创建（极大提升性能）
+      // 修复：globalTimezone 可能未定义，添加默认值 'UTC'
+      const tz = globalTimezone || 'UTC';
       const currentDtf = new Intl.DateTimeFormat('en-US', {
-          timeZone: globalTimezone,
+          timeZone: tz,
           hour12: false,
           year: 'numeric', month: '2-digit', day: '2-digit'
       });
@@ -1971,7 +1970,7 @@ const lunarBiz = {
       const currentDateInTimezone = Date.UTC(getCurrent('year'), getCurrent('month') - 1, getCurrent('day'), 0, 0, 0);
 
       const displayDtf = new Intl.DateTimeFormat('zh-CN', {
-        timeZone: globalTimezone,
+        timeZone: tz,
         year: 'numeric',
         month: '2-digit',
         day: '2-digit'
@@ -7123,13 +7122,9 @@ async function checkExpiringSubscriptions(env) {
 // 1. 获取当前时间的 UTC 时间戳
 const nowTs = currentTime.getTime();
 
-const tzOffset = getTimezoneOffset(timezone); 
-// 修正后的到期时间 = 原始UTC时间 - 时区偏移小时
-const adjustedExpiryTime = expiryDate.getTime() - (tzOffset * MS_PER_HOUR);
-
+// 修复：直接使用 expiryDate 与 currentTime 的 UTC 差值，不再对 expiryDate 进行时区调整
 let daysDiff = Math.round((expiryMidnight - currentMidnight) / MS_PER_DAY);
-// 使用修正后的时间计算差值
-let diffMs = adjustedExpiryTime - currentTime.getTime(); 
+let diffMs = expiryDate.getTime() - currentTime.getTime();
 let diffHours = diffMs / MS_PER_HOUR;
 
       // ==========================================
@@ -7424,7 +7419,7 @@ export default {
   }
 };
 // ==================== 仪表盘统计函数 ====================
-// 汇率配置 (以 CNY 为基准，当 API 不可用或缺少特定币种如 TWD 时使用，属于兜底汇率)
+// 汇率配置 (以 CNY 为基准，使用直接报价：1外币 = ? 人民币)
 // 您可以根据需要修改此处的汇率
 const FALLBACK_RATES = {
   'CNY': 1,
@@ -7447,21 +7442,25 @@ async function getDynamicRates(env) {
     if (cached && cached.ts && (Date.now() - cached.ts < CACHE_TTL)) {
       return cached.rates;  // console.log('[汇率] 使用 KV 缓存');
     }
-    const response = await fetch('https://api.frankfurter.dev/v1/latest?base=CNY'); // B. 缓存失效或不存在，请求 Frankfurter API  
+    const response = await fetch('https://api.frankfurter.dev/v1/latest?from=CNY'); // B. 缓存失效或不存在，请求 Frankfurter API，使用 from=CNY 获取直接报价  
     if (response.ok) {
       const data = await response.json();
-      const newRates = {  // C. 合并逻辑：以 API 数据覆盖兜底数据 (保留 API 没有的币种，如 TWD)
-        ...FALLBACK_RATES, 
-        ...data.rates, 
-        'CNY': 1
-      };
+      // data.rates 是 1 CNY = ? 外币（间接报价），我们需要转换为直接报价（1外币 = ? CNY）
+      // 例如 data.rates.USD = 0.143 表示 1 CNY = 0.143 USD，则直接报价 USD/CNY = 1 / 0.143 ≈ 6.99
+      const directRates = { ...FALLBACK_RATES }; // 先复制兜底
+      for (const [currency, rate] of Object.entries(data.rates)) {
+        if (rate && rate > 0) {
+          directRates[currency] = 1 / rate; // 转换为直接报价
+        }
+      }
+      directRates['CNY'] = 1;
 
       await env.SUBSCRIPTIONS_KV.put(CACHE_KEY, JSON.stringify({  // D. 写入 KV 缓存
         ts: Date.now(),
-        rates: newRates
+        rates: directRates
       }));
       
-      return newRates;
+      return directRates;
     } else {
       console.warn('[汇率] API 请求失败，使用兜底汇率');
     }
@@ -7476,9 +7475,9 @@ function convertToCNY(amount, currency, rates) {
   
   const code = currency || 'CNY';
   if (code === 'CNY') return amount; // 如果是基准货币，直接返回
-  const rate = rates[code];  // 获取汇率
+  const rate = rates[code];  // 获取直接报价（1外币 = ? CNY）
   if (!rate) return amount;  // 如果没有汇率，原样返回（或者你可以选择抛出错误/返回0）
-  return amount / rate;
+  return amount * rate; // 修复：改为乘法
 }
 // 修改函数签名，增加 rates 参数
 function calculateMonthlyExpense(subscriptions, timezone, rates) {
