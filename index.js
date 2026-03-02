@@ -4758,7 +4758,6 @@ const configPage = `
         }
         function formatTimezoneDisplay(tz) {
           try {
-            // 使用更准确的时区偏移计算方法
             const now = new Date();
             const dtf = new Intl.DateTimeFormat('en-US', {
               timeZone: tz,
@@ -4772,7 +4771,6 @@ const configPage = `
             const utc = now.getTime();
             const offset = Math.round((target - utc) / (1000 * 60 * 60));
             
-            // 时区中文名称映射
             const timezoneNames = {
               'UTC': '世界标准时间',
               'Asia/Shanghai': '中国标准时间',
@@ -6312,7 +6310,7 @@ async function manualRenewSubscription(id, env, options = {}) {
       amount: amount,
       type: 'manual',
       note: note,
-      periodStart: newStartDate.toISOString(), // 记录实际的计费开始日
+      periodStart: newStartDate.toISOString(), // 记录实际的计费周期开始
       periodEnd: newExpiryDate.toISOString()
     };
 
@@ -7118,9 +7116,6 @@ async function checkExpiringSubscriptions(env) {
 } else {
     expiryMidnight = getTimezoneMidnightTimestamp(expiryDate, timezone);
 }
-
-// 1. 获取当前时间的 UTC 时间戳
-const nowTs = currentTime.getTime();
 
 // 修复：直接使用 expiryDate 与 currentTime 的 UTC 差值，不再对 expiryDate 进行时区调整
 let daysDiff = Math.round((expiryMidnight - currentMidnight) / MS_PER_DAY);
